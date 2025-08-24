@@ -15,7 +15,7 @@ from ..core import AbstractYAMLObjectSingleton, Frame
 from . import utils
 from .abstract import (
     AbstractPlugin, FileResolvePluginConfig, FileResolverPlugin, PluginConfig, PluginSettings, ResolvedScript,
-    SettingsNamespace, _BasePluginT
+    SettingsNamespace, WorkspacePlugin, WorkspaceConfig, _BasePluginT
 )
 from .utils import *  # noqa: F401,F403
 
@@ -33,6 +33,7 @@ PluginT = TypeVar('PluginT', bound=_BasePluginT)
 __all__ = [
     'AbstractPlugin', 'PluginConfig', 'PluginSettings', 'SettingsNamespace',
     'FileResolverPlugin', 'FileResolvePluginConfig', 'ResolvedScript',
+    'WorkspacePlugin', 'WorkspaceConfig',
     *utils.__all__
 ]
 
@@ -285,6 +286,9 @@ class Plugins(AbstractYAMLObjectSingleton):
 
         self.plugins = get_installed_plugins(AbstractPlugin, False, self.main)
 
+        # load workspace plugins separately
+        self.workspace_plugins = get_installed_plugins(WorkspacePlugin, False, self.main)
+
         i = 0
         for name, plugin in self.plugins.items():
             assert isinstance(plugin, QWidget)
@@ -303,6 +307,14 @@ class Plugins(AbstractYAMLObjectSingleton):
 
             self.plugins_tab.addTab(plugin, plugin._config.display_name)
             i += 1
+
+        # add workspace plugins to main window here
+        for name, workspace_plugin in self.workspace_plugins.items():
+            assert isinstance(workspace_plugin, QWidget)
+            workspace_plugin.setObjectName(f'WorkspacePlugins.{name}')
+
+            # add workspace plugin to workspace manager here
+            self.main.workspace_manager.add_workspace_plugin(workspace_plugin)
 
     def setup_ui(self) -> None:
         if self.main.settings.plugins_bar_save_behaviour:

@@ -402,10 +402,66 @@ class GraphicsView(QGraphicsView):
 
 
 class MainVideoOutputGraphicsView(GraphicsView):
+    def __init__(self, main: MainWindow, parent: QWidget | None = None) -> None:
+        super().__init__(main, parent)
+        from ...plugins.abstract import WorkspacePlugin
+        self._active_workspace: WorkspacePlugin | None = None
+        self._workspace_node: vs.VideoNode | None = None
+
     @property
     def content_width(self) -> int:
+        if self._workspace_node:
+            return self._workspace_node.width
         return self.main.current_output.width
 
     @property
     def content_height(self) -> int:
+        if self._workspace_node:
+            return self._workspace_node.height
         return self.main.current_output.height
+
+    def set_active_workspace(self, workspace: WorkspacePlugin | None) -> None:
+
+        if self._active_workspace:
+            self._active_workspace.deactivate_workspace()
+
+        self._active_workspace = workspace
+
+        if workspace:
+            workspace.activate_workspace()
+            self._update_workspace_node()
+        else:
+            self._workspace_node = None
+
+        # refresh the view and re-render current frame so changes are visible immediately
+        self.setup_view()
+        try:
+            self.main.switch_frame(self.main.current_output.last_showed_frame)
+        except Exception:
+            ...
+
+    def _update_workspace_node(self) -> None:
+        """update the workspace node when the output changes"""
+        if not self._active_workspace or not self.main.current_output:
+            self._workspace_node = None
+            return
+
+        try:
+            original_node = self.main.current_output.source.clip
+            workspace_node = self._active_workspace.get_workspace_node(original_node)
+
+            self._workspace_node = self.main.current_output.prepare_vs_output(workspace_node, True)
+        except Exception as e:
+            print(f"Error updating workspace node: {e}")
+            self._workspace_node = None
+
+    def get_current_node(self) -> vs.VideoNode:
+        """Get the current node to display (workspace node or original)."""
+        if self._workspace_node:
+            return self._workspace_node
+        return self.main.current_output.prepared.clip
+
+    @property
+    def active_workspace(self) -> WorkspacePlugin | None:
+        """Get the currently active workspace."""
+        return self._active_workspace

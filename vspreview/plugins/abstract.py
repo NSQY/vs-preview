@@ -11,12 +11,15 @@ from jetpytools import SPath, T
 from ..core import ExtendedWidgetBase, Frame, NotchProvider, QYAMLObject
 from ..core.bases import yaml_Loader
 
+import vapoursynth as vs
+
 if TYPE_CHECKING:
     from ..main import MainWindow
 
 
 __all__ = [
     'AbstractPlugin', 'PluginConfig', 'PluginSettings', 'PluginShortcut', 'SettingsNamespace',
+    'WorkspacePlugin', 'WorkspaceConfig',
 
     'FileResolverPlugin', 'FileResolvePluginConfig', 'ResolvedScript'
 ]
@@ -74,6 +77,12 @@ class PluginConfig(_BasePluginConfig, NamedTuple):  # type: ignore
     display_name: str
     visible_in_tab: bool = True
     settings_type: type[PluginSettings] = PluginSettings
+    workspace: bool = False
+
+
+class WorkspaceConfig(PluginConfig):
+    def __new__(cls, namespace: str, display_name: str, visible_in_tab: bool = False, settings_type: type[PluginSettings] = PluginSettings) -> WorkspaceConfig:
+        return super().__new__(cls, namespace, display_name, visible_in_tab, settings_type, True)
 
 
 class FileResolvePluginConfig(_BasePluginConfig, NamedTuple):  # type: ignore
@@ -207,6 +216,62 @@ class AbstractPlugin(ExtendedWidgetBase, NotchProvider):
 
     def __setstate__(self) -> None:
         ...
+
+
+class WorkspacePlugin(AbstractPlugin, QWidget):
+    """Plugin that creates a custom viewport/workspace instead of a sidebar widget."""
+
+    _config: ClassVar[PluginConfig]
+
+    def __init__(self, main: MainWindow) -> None:
+        super().__init__(main)
+        self._is_active = False
+
+    def activate_workspace(self) -> None:
+        """Called when this workspace becomes the active viewport."""
+        self._is_active = True
+        self.on_workspace_activated()
+
+    def deactivate_workspace(self) -> None:
+        """Called when this workspace is no longer the active viewport."""
+        self._is_active = False
+        self.on_workspace_deactivated()
+
+    def on_workspace_activated(self) -> None:
+        """Override this method to handle workspace activation."""
+        pass
+
+    def on_workspace_deactivated(self) -> None:
+        """Override this method to handle workspace deactivation."""
+        pass
+
+    @property
+    def is_active(self) -> bool:
+        """Returns True if this workspace is currently active."""
+        return self._is_active
+
+    def get_workspace_node(self, original_node: vs.VideoNode) -> vs.VideoNode:
+        """
+        Override this method to return a modified version of the node for the workspace.
+
+        Args:
+            original_node: The original video node from the script
+
+        Returns:
+            The modified video node for this workspace
+        """
+        return original_node
+
+    def get_workspace_display_name(self) -> str:
+        """Returns the PluginConfig.display_name for this workspace."""
+        return self._config.display_name
+
+    def setup_ui(self) -> None:
+        """
+        Setup UI for workspace plugin.
+        This function is called when the workspace is activated.
+        """
+        pass
 
 
 class FileResolverPlugin:

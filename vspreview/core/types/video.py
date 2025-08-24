@@ -488,7 +488,13 @@ class VideoOutput(AbstractYAMLObject):
 
         if not vs_frame:
             try:
-                vs_frame = self.prepared.clip.get_frame(frame.value)
+                # use workspace node if available, otherwise use prepared clip
+                clip_to_use = (
+                    self.main.graphics_view.get_current_node()
+                    if hasattr(self.main.graphics_view, "get_current_node")
+                    else self.prepared.clip
+                )
+                vs_frame = clip_to_use.get_frame(frame.value)
             except vs.Error as e:
                 self.main.handle_error(e)
                 return QPixmap()

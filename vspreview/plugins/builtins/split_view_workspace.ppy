@@ -1,0 +1,205 @@
+from __future__ import annotations
+
+from typing import Any, Sequence
+
+
+from vstools import (
+    core, depth, get_lowest_value, get_peak_value, split, stack_clips, vs
+)
+
+from vspreview.core import AbstractSettingsWidget, CheckBox, DoubleSpinBox, HBoxLayout, VBoxLayout, try_load
+from vspreview.main import MainWindow
+from vspreview.plugins import WorkspacePlugin, WorkspaceConfig
+
+__all__ = [
+    'SplitPlanesPlugin2'
+]
+
+
+class SplitPlanesPlugin2(WorkspacePlugin):
+    _config = WorkspaceConfig('dev.setsugen.split_planes_workspace', 'Split Planes Workspace')
+
+    def __init__(self, main: MainWindow) -> None:
+        super().__init__(main)
+        self.split_settings = SplitPlanesSettings(self)
+        print(f"SplitPlanesPlugin initialized with settings: {self.split_settings}")
+
+    def setup_ui(self) -> None:
+        pass
+
+    def get_workspace_node(self, original_node: vs.VideoNode) -> vs.VideoNode:
+        print(f"{self.__class__.__name__}: Processing node with format: {original_node.format}")
+
+        if not original_node.format:
+            print(f"{self.__class__.__name__}: Node format is None, returning {original_node}")
+            return original_node
+
+        print(f"{self.__class__.__name__}: Color family: {original_node.format.color_family}")
+
+        if original_node.format.color_family is vs.GRAY:
+            print(f"{self.__class__.__name__}: Grayscale format, returning {original_node.format.color_family}")
+            return original_node
+
+        if original_node.format.color_family is vs.YUV:
+            if original_node.format.sample_type is vs.FLOAT:
+                original_node = depth(original_node, 32).std.Expr(['x', 'x 0.5 +'])
+
+            def offset_uv_planes(value: float, plane_stats: str) -> list[vs.VideoNode]:
+                planes = split(original_node)
+
+                if original_node.format.sample_type is vs.FLOAT:
+                    value += 0.5
+
+                new_planes = [
+                    planes[0],
+                ] + [
+                    p.std.PlaneStats().akarin.Expr(f'x {value} x.PlaneStats{plane_stats} - +')
+                    for p in planes[1:]
+                ]
+                return new_planes
+
+            print(f"{self.__class__.__name__}: split_settings = {self.split_settings}")
+            print(f"{self.__class__.__name__}: offset_uv_planes_fix = {self.split_settings.offset_uv_planes_fix}")
+            print(f"{self.__class__.__name__}: offset_uv_planes_min = {self.split_settings.offset_uv_planes_min}")
+            print(f"{self.__class__.__name__}: offset_uv_planes_max = {self.split_settings.offset_uv_planes_max}")
+
+            if self.split_settings.offset_uv_planes_fix:
+                planes = split(core.akarin.Expr(original_node, ['x', f'x {self.split_settings.offset_uv_planes_fix_value} +']))
+            elif self.split_settings.offset_uv_planes_min:
+                planes = offset_uv_planes(get_lowest_value(original_node, True), "Min")
+            elif self.split_settings.offset_uv_planes_max:
+                planes = offset_uv_planes(get_peak_value(original_node, True), "Max")
+            else:
+                planes = split(original_node)
+        else:
+            planes = split(original_node)
+
+        if not original_node.format:
+            return original_node
+
+        planes = [p.text.Text(text=k) for k, p in zip(original_node.format.name, planes)]
+
+        org: Sequence[vs.VideoNode | Sequence[vs.VideoNode]]
+
+        if original_node.format.subsampling_h == 2:
+            middle = [(blank := planes[1].std.BlankClip(keep=True)), *planes[1:], blank]
+            org = [planes[0], middle]
+        elif original_node.format.subsampling_h == 1:
+            org = [planes[0], planes[1:]]
+        else:
+            org = planes
+
+        return stack_clips(org)
+
+    def on_workspace_activated(self) -> None:
+        print(f"{self.__class__.__name__}: Split Planes workspace activated")
+
+    def on_workspace_deactivated(self) -> None:
+        print(f"{self.__class__.__name__}: Split Planes workspace deactivated")
+
+    def add_shortcuts(self) -> None:
+        pass
+
+
+class SplitPlanesSettings(AbstractSettingsWidget):
+    def __init__(self, plugin: SplitPlanesPlugin2) -> None:
+        self.plugin = plugin
+        super().__init__()
+
+    def setup_ui(self) -> None:
+        super().setup_ui()
+
+        self.offset_uv_fix_checkbox = CheckBox(
+            "Offset UV planes by a fixed value", clicked=self.offset_uv_fix_checkbox_clicked
+        )
+        self.offset_uv_min_checkbox = CheckBox(
+            "Offset UV planes by the minimum value of each frame", clicked=self.offset_uv_min_checkbox_clicked
+        )
+        self.offset_uv_max_checkbox = CheckBox(
+            "Offset UV planes by the maximum value of each frame", clicked=self.offset_uv_max_checkbox_clicked
+        )
+
+        self.fixed_value_spinbox = DoubleSpinBox(self)
+
+        VBoxLayout(self.vlayout, [
+            HBoxLayout([self.offset_uv_fix_checkbox, self.fixed_value_spinbox]),
+            self.offset_uv_min_checkbox,
+            self.offset_uv_max_checkbox
+        ])
+
+    def set_defaults(self) -> None:
+        self.offset_uv_fix_checkbox.setChecked(False)
+        self.offset_uv_min_checkbox.setChecked(False)
+        self.offset_uv_max_checkbox.setChecked(False)
+        self.fixed_value_spinbox.setEnabled(False)
+
+        self.fixed_value_spinbox.setDecimals(0)
+        self.fixed_value_spinbox.setSingleStep(1)
+        self.fixed_value_spinbox.setMinimum(-65535)
+        self.fixed_value_spinbox.setMaximum(65535)
+        self.fixed_value_spinbox.setValue(0)
+
+    def offset_uv_fix_checkbox_clicked(self, checked: bool | None = None) -> None:
+        if checked:
+            if not self.offset_uv_fix_checkbox.isChecked():
+                self.offset_uv_fix_checkbox.setChecked(True)
+
+            self.offset_uv_min_checkbox.setChecked(False)
+            self.offset_uv_max_checkbox.setChecked(False)
+
+            self.fixed_value_spinbox.setEnabled(True)
+        else:
+            self.fixed_value_spinbox.setEnabled(False)
+
+    def offset_uv_min_checkbox_clicked(self, checked: bool | None = None) -> None:
+        if checked:
+            if not self.offset_uv_min_checkbox.isChecked():
+                self.offset_uv_min_checkbox.setChecked(True)
+
+            self.offset_uv_fix_checkbox.setChecked(False)
+            self.offset_uv_max_checkbox.setChecked(False)
+
+            self.fixed_value_spinbox.setEnabled(False)
+
+    def offset_uv_max_checkbox_clicked(self, checked: bool | None = None) -> None:
+        if checked:
+            if not self.offset_uv_max_checkbox.isChecked():
+                self.offset_uv_max_checkbox.setChecked(True)
+
+            self.offset_uv_fix_checkbox.setChecked(False)
+            self.offset_uv_min_checkbox.setChecked(False)
+
+            self.fixed_value_spinbox.setEnabled(False)
+
+    @property
+    def offset_uv_planes_fix(self) -> bool:
+        return self.offset_uv_fix_checkbox.isChecked()
+
+    @property
+    def offset_uv_planes_min(self) -> bool:
+        return self.offset_uv_min_checkbox.isChecked()
+
+    @property
+    def offset_uv_planes_max(self) -> bool:
+        return self.offset_uv_max_checkbox.isChecked()
+
+    @property
+    def offset_uv_planes_fix_value(self) -> float:
+        return self.fixed_value_spinbox.value()
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {
+            'offset_uv_planes_fix': self.offset_uv_planes_fix,
+            'offset_uv_planes_min': self.offset_uv_planes_min,
+            'offset_uv_planes_max': self.offset_uv_planes_max,
+            'offset_uv_planes_fix_value': self.offset_uv_planes_fix_value,
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        try_load(state, 'offset_uv_planes_fix', bool, self.offset_uv_fix_checkbox_clicked)
+        try_load(state, 'offset_uv_planes_min', bool, self.offset_uv_min_checkbox_clicked)
+        try_load(state, 'offset_uv_planes_max', bool, self.offset_uv_max_checkbox_clicked)
+        try_load(state, 'offset_uv_planes_fix_value', float, self.fixed_value_spinbox.setValue)
+
+
+
